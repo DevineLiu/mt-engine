@@ -17,10 +17,10 @@ use rustc_hash::FxHashMap;
 use slab::Slab;
 use std::collections::BTreeMap;
 
-#[cfg(feature = "serde")]
-use crate::snapshot::SnapshotModel;
 #[cfg(feature = "snapshot")]
 use crate::snapshot::SnapshotConfig;
+#[cfg(feature = "serde")]
+use crate::snapshot::SnapshotModel;
 #[cfg(feature = "snapshot")]
 use std::io::Write;
 
@@ -455,7 +455,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
         } else if let Some(s_idx) = self.pending_stop_map.remove(&order_id) {
             // 从条件单池中移除，触发时将失效
             self.condition_order_store.try_remove(s_idx);
-            
+
             CommandOutcome::Applied(CommandReport {
                 order_id,
                 status: OrderStatus::Cancelled,
@@ -613,7 +613,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                 if let Some(mut triggered_order) = self.condition_order_store.try_remove(s_idx) {
                     // 激活后从映射表中移除
                     self.pending_stop_map.remove(&triggered_order.order_id);
-                    
+
                     // 激活后直接进行 match_order
                     let _ = self.match_order(&mut triggered_order, ts, seq, offset);
 
@@ -647,7 +647,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
         let order_id = order.order_id;
         let idx = self.condition_order_store.insert(order);
         self.pending_stop_map.insert(order_id, idx);
-        
+
         match order.side {
             Side::buy => {
                 if order.trigger_price >= self.ltp {
@@ -702,11 +702,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             trade_id_seq: self.trade_id_seq,
             ltp: self.ltp,
             levels: self.backend.export_levels(),
-            condition_orders: self
-                .condition_order_store
-                .iter()
-                .map(|(_, o)| *o)
-                .collect(),
+            condition_orders: self.condition_order_store.iter().map(|(_, o)| *o).collect(),
         }
     }
 
@@ -752,7 +748,10 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             .unwrap_or(true);
 
         #[cfg(feature = "dev")]
-        println!("[Dev] Triggering snapshot: seq={}, ts={}, path={}", seq, ts, path);
+        println!(
+            "[Dev] Triggering snapshot: seq={}, ts={}, path={}",
+            seq, ts, path
+        );
 
         unsafe {
             let pid = libc::fork();
@@ -761,7 +760,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                 println!("[Dev] Snapshot child started: pid={}", libc::getpid());
 
                 // 子进程逻辑：在子进程中完成数据搜集，彻底消灭对父进程热路径的干扰
-                
+
                 // 1. 设置 CPU 亲和性 (可选，仅 Linux 支持)
                 #[cfg(target_os = "linux")]
                 if let Ok(cpu_id_str) = std::env::var("SNAPSHOT_CHILD_CPU_ID") {
@@ -795,7 +794,10 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                 let serialized = bincode::serialize(&model).unwrap();
 
                 #[cfg(feature = "dev")]
-                println!("[Dev] Snapshot serialization complete (size: {} bytes)", serialized.len());
+                println!(
+                    "[Dev] Snapshot serialization complete (size: {} bytes)",
+                    serialized.len()
+                );
 
                 // 4. 确保目录存在并写入
                 let snapshot_path = std::path::Path::new(&path);
@@ -844,10 +846,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
     fn check_snapshot_trigger(&mut self) {
         if let Some(config) = &self.snapshot_config {
             self.uncommitted_commands += 1;
-            let time_passed = self
-                .last_timestamp
-                .0
-                .saturating_sub(self.last_snapshot_ts);
+            let time_passed = self.last_timestamp.0.saturating_sub(self.last_snapshot_ts);
 
             if self.uncommitted_commands >= config.count_interval
                 || (config.time_interval_ms > 0 && time_passed >= config.time_interval_ms)
@@ -860,12 +859,18 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                         if ret == self.snapshotting_pid || ret < 0 {
                             // 子进程结束或出错
                             #[cfg(feature = "dev")]
-                            println!("[Dev] Snapshot child {} reaped (status: {})", self.snapshotting_pid, status);
+                            println!(
+                                "[Dev] Snapshot child {} reaped (status: {})",
+                                self.snapshotting_pid, status
+                            );
                             self.snapshotting_pid = 0;
                         } else {
                             // 仍在运行，跳过本次触发，等待下一轮
                             #[cfg(feature = "dev")]
-                            println!("[Dev] Skipping snapshot trigger: child {} still running", self.snapshotting_pid);
+                            println!(
+                                "[Dev] Skipping snapshot trigger: child {} still running",
+                                self.snapshotting_pid
+                            );
                             return;
                         }
                     }

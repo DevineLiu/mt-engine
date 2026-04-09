@@ -142,7 +142,10 @@ impl OrderBookBackend for DenseBackend {
 
     #[inline(always)]
     fn insert_order(&mut self, order: RestingOrder<Self::LevelIdx>) -> Self::OrderIdx {
-        debug_assert!(!self.order_map.contains_key(&order.data.order_id), "Duplicate order ID in dense backend");
+        debug_assert!(
+            !self.order_map.contains_key(&order.data.order_id),
+            "Duplicate order ID in dense backend"
+        );
         let idx = self.free_list.pop().expect("Order pool exhausted");
         self.order_pool[idx as usize] = order;
         self.order_links[idx as usize] = OrderLink {
@@ -464,10 +467,12 @@ mod tests {
         let level = backend.get_or_create_level(Side::buy, Price(150));
 
         let mut data1: crate::orders::OrderData = unsafe { std::mem::zeroed() };
+        data1.order_id = OrderId(1);
         data1.remaining_qty = Quantity(10);
         let id1 = backend.insert_order(RestingOrder::new(data1, level));
 
         let mut data2: crate::orders::OrderData = unsafe { std::mem::zeroed() };
+        data2.order_id = OrderId(2);
         data2.remaining_qty = Quantity(20);
         let id2 = backend.insert_order(RestingOrder::new(data2, level));
 

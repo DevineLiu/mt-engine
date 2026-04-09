@@ -2008,17 +2008,33 @@ fn test_engine_snapshot_recovery() {
 
     let mut resp_buf = [0u8; 4096];
     let mut cmd_buf = [0u8; 1024];
-    
+
     // 1. 在 SparseBackend 上构建初始状态
     let mut engine = Engine::new(SparseBackend::new(), &mut resp_buf);
     let mut codec = CommandCodec::new(&mut cmd_buf);
 
     // 提交一些订单
     engine.execute_submit(&codec.encode_submit(
-        0, OrderId(1), UserId(101), Side::buy, Price(100), Quantity(10), SequenceNumber(1), Timestamp(1000), TimeInForce::gtc
+        0,
+        OrderId(1),
+        UserId(101),
+        Side::buy,
+        Price(100),
+        Quantity(10),
+        SequenceNumber(1),
+        Timestamp(1000),
+        TimeInForce::gtc,
     ));
     engine.execute_submit(&codec.encode_submit(
-        100, OrderId(2), UserId(102), Side::sell, Price(110), Quantity(20), SequenceNumber(2), Timestamp(1100), TimeInForce::gtc
+        100,
+        OrderId(2),
+        UserId(102),
+        Side::sell,
+        Price(110),
+        Quantity(20),
+        SequenceNumber(2),
+        Timestamp(1100),
+        TimeInForce::gtc,
     ));
 
     // 2. 导出快照模型
@@ -2034,7 +2050,11 @@ fn test_engine_snapshot_recovery() {
     assert_eq!(engine_sparse.backend.best_ask_price().unwrap().0, 110);
 
     // 4. 在一个 DenseBackend 引擎上恢复 (异构恢复验证)
-    let dense_config = PriceRange { min: Price(1), max: Price(1000), tick: Price(1) };
+    let dense_config = PriceRange {
+        min: Price(1),
+        max: Price(1000),
+        tick: Price(1),
+    };
     let mut resp_buf3 = [0u8; 4096];
     let mut engine_dense = Engine::new(DenseBackend::new(dense_config, 1024), &mut resp_buf3);
     engine_dense.from_snapshot(snapshot);
@@ -2058,15 +2078,49 @@ fn test_snapshot_complex_state_recovery() {
 
     // 1. 准备复杂状态
     // - 普通单
-    engine.execute_submit(&codec.encode_submit(0, OrderId(1), UserId(1), Side::buy, Price(100), Quantity(10), SequenceNumber(1), Timestamp(1000), TimeInForce::gtc));
-    
-    // - 冰山单 
+    engine.execute_submit(&codec.encode_submit(
+        0,
+        OrderId(1),
+        UserId(1),
+        Side::buy,
+        Price(100),
+        Quantity(10),
+        SequenceNumber(1),
+        Timestamp(1000),
+        TimeInForce::gtc,
+    ));
+
+    // - 冰山单
     let mut iceberg_flags = OrderFlags::new(0);
     iceberg_flags.set_iceberg(true);
-    engine.execute_submit(&codec.encode_submit_ext(100, OrderId(2), UserId(2), Side::sell, OrderType::limit, Price(110), Quantity(100), SequenceNumber(2), Timestamp(1100), TimeInForce::gtc, iceberg_flags));
-    
+    engine.execute_submit(&codec.encode_submit_ext(
+        100,
+        OrderId(2),
+        UserId(2),
+        Side::sell,
+        OrderType::limit,
+        Price(110),
+        Quantity(100),
+        SequenceNumber(2),
+        Timestamp(1100),
+        TimeInForce::gtc,
+        iceberg_flags,
+    ));
+
     // - 止损单
-    engine.execute_submit(&codec.encode_submit_ext(200, OrderId(3), UserId(3), Side::buy, OrderType::stop, Price(120), Quantity(10), SequenceNumber(3), Timestamp(1200), TimeInForce::gtc, OrderFlags::new(0)));
+    engine.execute_submit(&codec.encode_submit_ext(
+        200,
+        OrderId(3),
+        UserId(3),
+        Side::buy,
+        OrderType::stop,
+        Price(120),
+        Quantity(10),
+        SequenceNumber(3),
+        Timestamp(1200),
+        TimeInForce::gtc,
+        OrderFlags::new(0),
+    ));
 
     engine.trade_id_seq = 500; // 手动设置成交 ID 起点
 
@@ -2074,24 +2128,54 @@ fn test_snapshot_complex_state_recovery() {
 
     // 2. 异构恢复到 DenseBackend
     let mut resp_buf2 = [0u8; 8192];
-    let mut engine_dense = Engine::new(DenseBackend::new(PriceRange { min: Price(1), max: Price(1000), tick: Price(1) }, 1024), &mut resp_buf2);
+    let mut engine_dense = Engine::new(
+        DenseBackend::new(
+            PriceRange {
+                min: Price(1),
+                max: Price(1000),
+                tick: Price(1),
+            },
+            1024,
+        ),
+        &mut resp_buf2,
+    );
     engine_dense.from_snapshot(snapshot);
 
     // 3. 验证状态
     assert_eq!(engine_dense.last_sequence_number.0, 3);
     assert_eq!(engine_dense.trade_id_seq, 500);
-    
+
     // 验证条件单池
     assert_eq!(engine_dense.condition_order_store.len(), 1);
     assert!(engine_dense.stop_buy_triggers.contains_key(&Price(120)));
 
     // 4. 继续撮合，验证逻辑连续性
     // 提交一个单子触发价格到 120，激活止损单
-    engine_dense.execute_submit(&codec.encode_submit(300, OrderId(4), UserId(4), Side::sell, Price(100), Quantity(10), SequenceNumber(4), Timestamp(1300), TimeInForce::gtc));
-    
+    engine_dense.execute_submit(&codec.encode_submit(
+        300,
+        OrderId(4),
+        UserId(4),
+        Side::sell,
+        Price(100),
+        Quantity(10),
+        SequenceNumber(4),
+        Timestamp(1300),
+        TimeInForce::gtc,
+    ));
+
     // 现在 LTP 应该是 100。提交一个单子把 LTP 推到 120 (通过和 ID 为 2 的冰山单成交)
-    engine_dense.execute_submit(&codec.encode_submit(400, OrderId(5), UserId(5), Side::buy, Price(120), Quantity(5), SequenceNumber(5), Timestamp(1400), TimeInForce::gtc));
-    
+    engine_dense.execute_submit(&codec.encode_submit(
+        400,
+        OrderId(5),
+        UserId(5),
+        Side::buy,
+        Price(120),
+        Quantity(5),
+        SequenceNumber(5),
+        Timestamp(1400),
+        TimeInForce::gtc,
+    ));
+
     assert_eq!(engine_dense.ltp.0, 110); // 与 ID 2 成交
     assert_eq!(engine_dense.trade_id_seq, 502); // 产生了两笔成交
 }
@@ -2114,13 +2198,33 @@ fn test_snapshot_trigger_threshold_logic() {
 
     // 发送 9 个指令，应该不会触发
     for i in 1..=9 {
-        engine.execute_submit(&codec.encode_submit(0, OrderId(i), UserId(1), Side::buy, Price(100), Quantity(1), SequenceNumber(i), Timestamp(1000 + i), TimeInForce::gtc));
-        assert_eq!(engine.uncommitted_commands, i as u64);
+        engine.execute_submit(&codec.encode_submit(
+            0,
+            OrderId(i),
+            UserId(1),
+            Side::buy,
+            Price(100),
+            Quantity(1),
+            SequenceNumber(i),
+            Timestamp(1000 + i),
+            TimeInForce::gtc,
+        ));
+        assert_eq!(engine.uncommitted_commands, i);
     }
 
     // 第 10 个指令触发
-    engine.execute_submit(&codec.encode_submit(0, OrderId(10), UserId(1), Side::buy, Price(100), Quantity(1), SequenceNumber(10), Timestamp(1010), TimeInForce::gtc));
-    
+    engine.execute_submit(&codec.encode_submit(
+        0,
+        OrderId(10),
+        UserId(1),
+        Side::buy,
+        Price(100),
+        Quantity(1),
+        SequenceNumber(10),
+        Timestamp(1010),
+        TimeInForce::gtc,
+    ));
+
     // 触发后计数器应该重置 (由 trigger_snapshot 设置)
     assert_eq!(engine.uncommitted_commands, 0);
 }
@@ -2131,9 +2235,9 @@ fn test_e2e_snapshot_portability() {
     use crate::book::backend::dense::DenseBackend;
     use crate::book::backend::dense::PriceRange;
     use crate::snapshot::SnapshotModel;
+    use crate::types::{OrderId, Price, Quantity};
     use mt_engine::order_flags::OrderFlags;
     use mt_engine::side::Side;
-    use crate::types::{OrderId, Price, Quantity};
     use std::io::Read;
 
     let mut resp_buf = [0u8; 16384];
@@ -2144,30 +2248,98 @@ fn test_e2e_snapshot_portability() {
     // 1. 生成复杂状态
     engine.trade_id_seq = 1000;
     engine.ltp = Price(100); // 设置初始价格，防止止损单立即触发
-    
+
     // - Bids
     for i in 1..=5 {
-        engine.execute_submit(&codec.encode_submit(0, OrderId(i), UserId(1), Side::buy, Price(100 - i), Quantity(10), SequenceNumber(i), Timestamp(1000 + i), TimeInForce::gtc));
+        engine.execute_submit(&codec.encode_submit(
+            0,
+            OrderId(i),
+            UserId(1),
+            Side::buy,
+            Price(100 - i),
+            Quantity(10),
+            SequenceNumber(i),
+            Timestamp(1000 + i),
+            TimeInForce::gtc,
+        ));
     }
     // - Asks (含冰山单)
     let mut flags_iceberg = OrderFlags::new(0);
     flags_iceberg.set_iceberg(true);
-    engine.execute_submit(&codec.encode_submit_ext(200, OrderId(6), UserId(2), Side::sell, mt_engine::order_type::OrderType::limit, Price(110), Quantity(100), SequenceNumber(6), Timestamp(1100), TimeInForce::gtc, flags_iceberg));
+    engine.execute_submit(&codec.encode_submit_ext(
+        200,
+        OrderId(6),
+        UserId(2),
+        Side::sell,
+        mt_engine::order_type::OrderType::limit,
+        Price(110),
+        Quantity(100),
+        SequenceNumber(6),
+        Timestamp(1100),
+        TimeInForce::gtc,
+        flags_iceberg,
+    ));
 
     // - Post-Only 单
     let mut flags_post = OrderFlags::new(0);
     flags_post.set_post_only(true);
-    engine.execute_submit(&codec.encode_submit_ext(0, OrderId(7), UserId(4), Side::buy, mt_engine::order_type::OrderType::limit, Price(90), Quantity(10), SequenceNumber(7), Timestamp(1150), TimeInForce::gtc, flags_post));
+    engine.execute_submit(&codec.encode_submit_ext(
+        0,
+        OrderId(7),
+        UserId(4),
+        Side::buy,
+        mt_engine::order_type::OrderType::limit,
+        Price(90),
+        Quantity(10),
+        SequenceNumber(7),
+        Timestamp(1150),
+        TimeInForce::gtc,
+        flags_post,
+    ));
 
     // - 止损单 (Stop-Market)
-    engine.execute_submit(&codec.encode_submit_ext(300, OrderId(8), UserId(5), Side::buy, mt_engine::order_type::OrderType::stop, Price(120), Quantity(10), SequenceNumber(8), Timestamp(1160), TimeInForce::gtc, OrderFlags::new(0)));
+    engine.execute_submit(&codec.encode_submit_ext(
+        300,
+        OrderId(8),
+        UserId(5),
+        Side::buy,
+        mt_engine::order_type::OrderType::stop,
+        Price(120),
+        Quantity(10),
+        SequenceNumber(8),
+        Timestamp(1160),
+        TimeInForce::gtc,
+        OrderFlags::new(0),
+    ));
 
     // - 止盈单 (Stop-Limit) -> 实际上当前逻辑统一为 stop 处理
-    engine.execute_submit(&codec.encode_submit_ext(400, OrderId(9), UserId(6), Side::sell, mt_engine::order_type::OrderType::stop_limit, Price(80), Quantity(10), SequenceNumber(9), Timestamp(1170), TimeInForce::gtc, OrderFlags::new(0)));
+    engine.execute_submit(&codec.encode_submit_ext(
+        400,
+        OrderId(9),
+        UserId(6),
+        Side::sell,
+        mt_engine::order_type::OrderType::stop_limit,
+        Price(80),
+        Quantity(10),
+        SequenceNumber(9),
+        Timestamp(1170),
+        TimeInForce::gtc,
+        OrderFlags::new(0),
+    ));
 
     // - 撮合一次更新 LTP，并消耗一部分冰山单
     // 买 110 vs 卖 110 (订单 6) -> 成交价 110
-    engine.execute_submit(&codec.encode_submit(0, OrderId(10), UserId(3), Side::buy, Price(110), Quantity(5), SequenceNumber(10), Timestamp(1200), TimeInForce::gtc));
+    engine.execute_submit(&codec.encode_submit(
+        0,
+        OrderId(10),
+        UserId(3),
+        Side::buy,
+        Price(110),
+        Quantity(5),
+        SequenceNumber(10),
+        Timestamp(1200),
+        TimeInForce::gtc,
+    ));
     assert_eq!(engine.ltp.0, 110);
     assert_eq!(engine.trade_id_seq, 1001);
 
@@ -2175,7 +2347,7 @@ fn test_e2e_snapshot_portability() {
     let model = engine.to_snapshot();
     let serialized = bincode::serialize(&model).unwrap();
     let snapshot_file = "/tmp/e2e_test_snapshot.bin.zst";
-    
+
     {
         let file = std::fs::File::create(snapshot_file).unwrap();
         let mut encoder = zstd::Encoder::new(file, 3).unwrap();
@@ -2196,12 +2368,17 @@ fn test_e2e_snapshot_portability() {
     let mut resp_buf_s = [0u8; 8192];
     let mut engine_s = Engine::new(SparseBackend::new(), &mut resp_buf_s);
     engine_s.from_snapshot(restored_model.clone());
-    
+
     assert_eq!(engine_s.ltp.0, 110);
     assert_eq!(engine_s.trade_id_seq, 1001);
     assert_eq!(engine_s.last_sequence_number.0, 10);
-    assert_eq!(engine_s.backend.level_total_qty(engine_s.backend.get_level(Price(110)).unwrap()), 95);
-    
+    assert_eq!(
+        engine_s
+            .backend
+            .level_total_qty(engine_s.backend.get_level(Price(110)).unwrap()),
+        95
+    );
+
     // 验证条件单恢复
     assert_eq!(engine_s.condition_order_store.len(), 2);
     assert!(engine_s.stop_buy_triggers.contains_key(&Price(120)));
@@ -2210,31 +2387,70 @@ fn test_e2e_snapshot_portability() {
     // 5. Dense-node 恢复测试
     {
         let mut resp_buf_d = [0u8; 8192];
-        let mut engine_d = Engine::new(DenseBackend::new(PriceRange { min: Price(1), max: Price(1000), tick: Price(1) }, 1024), &mut resp_buf_d);
+        let mut engine_d = Engine::new(
+            DenseBackend::new(
+                PriceRange {
+                    min: Price(1),
+                    max: Price(1000),
+                    tick: Price(1),
+                },
+                1024,
+            ),
+            &mut resp_buf_d,
+        );
         engine_d.from_snapshot(restored_model);
-        
+
         assert_eq!(engine_d.ltp.0, 110);
         // 验证 Post-only 订单在位图中存在
         assert!(engine_d.backend.get_level(Price(90)).is_some());
-        
+
         // 6. 深度一致性详尽比对 (L2 Depth Comparison)
-        let prices_to_check = vec![Price(110), Price(99), Price(98), Price(97), Price(96), Price(95), Price(90)];
+        let prices_to_check = vec![
+            Price(110),
+            Price(99),
+            Price(98),
+            Price(97),
+            Price(96),
+            Price(95),
+            Price(90),
+        ];
         for p in prices_to_check {
-            let qty_s = engine_s.backend.get_level(p).map(|l| engine_s.backend.level_total_qty(l)).unwrap_or(0);
-            let qty_d = engine_d.backend.get_level(p).map(|l| engine_d.backend.level_total_qty(l)).unwrap_or(0);
+            let qty_s = engine_s
+                .backend
+                .get_level(p)
+                .map(|l| engine_s.backend.level_total_qty(l))
+                .unwrap_or(0);
+            let qty_d = engine_d
+                .backend
+                .get_level(p)
+                .map(|l| engine_d.backend.level_total_qty(l))
+                .unwrap_or(0);
             assert_eq!(qty_s, qty_d, "L2 Depth mismatch at price {:?}", p);
         }
-        
+
         // 7. 连续性撮合一致性验证 (Post-Recovery Match Integrity)
         // 提交一个足以消耗多个档位的买单，观察两个引擎产生的 Trade ID 和 LTP 是否保持同步
-        let match_cmd = codec.encode_submit(0, OrderId(100), UserId(99), Side::buy, Price(115), Quantity(200), SequenceNumber(100), Timestamp(2000), TimeInForce::gtc);
-        
+        let match_cmd = codec.encode_submit(
+            0,
+            OrderId(100),
+            UserId(99),
+            Side::buy,
+            Price(115),
+            Quantity(200),
+            SequenceNumber(100),
+            Timestamp(2000),
+            TimeInForce::gtc,
+        );
+
         engine_s.execute_submit(&match_cmd);
         engine_d.execute_submit(&match_cmd);
-        
+
         assert_eq!(engine_s.ltp.0, engine_d.ltp.0, "Post-recovery LTP mismatch");
-        assert_eq!(engine_s.trade_id_seq, engine_d.trade_id_seq, "Post-recovery Trade ID mismatch");
+        assert_eq!(
+            engine_s.trade_id_seq, engine_d.trade_id_seq,
+            "Post-recovery Trade ID mismatch"
+        );
     }
-    
+
     let _ = std::fs::remove_file(snapshot_file);
 }

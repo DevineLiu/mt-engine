@@ -41,6 +41,28 @@ Benchmarked under **50,000 order steady-state saturation** with strictly **monot
 - 🩸 **Zero-Allocation**: The hot path (including conditional order cascading triggers) completely eliminates any dynamic memory allocation.
 - 🧊 **Cache Optimized**: `OrderData` uses 128-byte alignment, combined with `_mm_prefetch` hardware prefetching and SoA abstraction to maximize CPU cache hit rates.
 - 🔄 **Advanced Features**: Natively supports iceberg orders, stop-loss triggers (O(1) cascading trigger pool), Post-Only slippage control, GTD/IOC/FOK, and end-to-end validation.
+- 🛡️ **ID Integrity Guard**: Built-in $O(1)$ validation to enforce strictly monotonic and unique OrderIDs, preventing state corruption at the gateway.
+
+---
+
+## 🛡️ Integration Requirements
+
+To achieve ultra-low latency and maintain system integrity, integration with MT-Engine must respect the following constraints:
+
+### 1. Strictly Monotonic OrderIDs
+Order IDs MUST be **strictly increasing** and **unique** for each symbol/engine instance:
+- **Requirement**: `new_id > last_order_id`.
+- **Enforcement**: The engine performs an $O(1)$ hardware-friendly check at the ingestion point.
+- **Reaction**: Requests with duplicate or regressing IDs are immediately rejected with `DuplicateOrderId`.
+- **Reason**: This eliminates the need for expensive hash map lookups for uniqueness checks, maintaining sub-20ns latency.
+
+### 2. SBE Protocol Standard
+All commands and reports follow the **Simple Binary Encoding (SBE)** standard:
+- **Zero-Allocation**: Messages are decoded and encoded directly in pre-allocated buffers.
+- **Fixed-Width Offset**: Efficient field access without variable-length parsing overhead.
+- **Schema**: Use the provided XML schemas in `/schemas` to generate your language-specific encoders.
+
+---
 
 ---
 
