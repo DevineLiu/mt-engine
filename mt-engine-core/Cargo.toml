@@ -18,6 +18,8 @@ libc = { version = "0.2", optional = true }
 snapshot = ["libc"]
 # 极致性能模式 (由读取/计算节点开启)
 dense-node = []
+# 开发观测模式 (由测试节点开启，零成本)
+dev = []
 
 [dev-dependencies]
 criterion = "0.5"

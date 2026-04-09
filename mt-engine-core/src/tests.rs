@@ -2042,3 +2042,85 @@ fn test_engine_snapshot_recovery() {
     assert_eq!(engine_dense.backend.best_bid_price().unwrap().0, 100);
     assert_eq!(engine_dense.backend.best_ask_price().unwrap().0, 110);
 }
+
+#[test]
+#[cfg(feature = "snapshot")]
+fn test_snapshot_complex_state_recovery() {
+    use crate::book::backend::dense::DenseBackend;
+    use crate::book::backend::dense::PriceRange;
+    use mt_engine::order_flags::OrderFlags;
+    use mt_engine::order_type::OrderType;
+
+    let mut resp_buf = [0u8; 8192];
+    let mut cmd_buf = [0u8; 1024];
+    let mut engine = Engine::new(SparseBackend::new(), &mut resp_buf);
+    let mut codec = CommandCodec::new(&mut cmd_buf);
+
+    // 1. 准备复杂状态
+    // - 普通单
+    engine.execute_submit(&codec.encode_submit(0, OrderId(1), UserId(1), Side::buy, Price(100), Quantity(10), SequenceNumber(1), Timestamp(1000), TimeInForce::gtc));
+    
+    // - 冰山单 
+    let mut iceberg_flags = OrderFlags::new(0);
+    iceberg_flags.set_iceberg(true);
+    engine.execute_submit(&codec.encode_submit_ext(100, OrderId(2), UserId(2), Side::sell, OrderType::limit, Price(110), Quantity(100), SequenceNumber(2), Timestamp(1100), TimeInForce::gtc, iceberg_flags));
+    
+    // - 止损单
+    engine.execute_submit(&codec.encode_submit_ext(200, OrderId(3), UserId(3), Side::buy, OrderType::stop, Price(120), Quantity(10), SequenceNumber(3), Timestamp(1200), TimeInForce::gtc, OrderFlags::new(0)));
+
+    engine.trade_id_seq = 500; // 手动设置成交 ID 起点
+
+    let snapshot = engine.to_snapshot();
+
+    // 2. 异构恢复到 DenseBackend
+    let mut resp_buf2 = [0u8; 8192];
+    let mut engine_dense = Engine::new(DenseBackend::new(PriceRange { min: Price(1), max: Price(1000), tick: Price(1) }, 1024), &mut resp_buf2);
+    engine_dense.from_snapshot(snapshot);
+
+    // 3. 验证状态
+    assert_eq!(engine_dense.last_sequence_number.0, 3);
+    assert_eq!(engine_dense.trade_id_seq, 500);
+    
+    // 验证条件单池
+    assert_eq!(engine_dense.condition_order_store.len(), 1);
+    assert!(engine_dense.stop_buy_triggers.contains_key(&Price(120)));
+
+    // 4. 继续撮合，验证逻辑连续性
+    // 提交一个单子触发价格到 120，激活止损单
+    engine_dense.execute_submit(&codec.encode_submit(300, OrderId(4), UserId(4), Side::sell, Price(100), Quantity(10), SequenceNumber(4), Timestamp(1300), TimeInForce::gtc));
+    
+    // 现在 LTP 应该是 100。提交一个单子把 LTP 推到 120 (通过和 ID 为 2 的冰山单成交)
+    engine_dense.execute_submit(&codec.encode_submit(400, OrderId(5), UserId(5), Side::buy, Price(120), Quantity(5), SequenceNumber(5), Timestamp(1400), TimeInForce::gtc));
+    
+    assert_eq!(engine_dense.ltp.0, 110); // 与 ID 2 成交
+    assert_eq!(engine_dense.trade_id_seq, 502); // 产生了两笔成交
+}
+
+#[test]
+#[cfg(feature = "snapshot")]
+fn test_snapshot_trigger_threshold_logic() {
+    use crate::snapshot::SnapshotConfig;
+    let mut resp_buf = [0u8; 1024];
+    let mut cmd_buf = [0u8; 1024];
+    let mut engine = Engine::new(SparseBackend::new(), &mut resp_buf);
+    let mut codec = CommandCodec::new(&mut cmd_buf);
+
+    engine.snapshot_config = Some(SnapshotConfig {
+        count_interval: 10,
+        time_interval_ms: 0,
+        path_template: "/tmp/test_snap_{seq}.bin".into(),
+        compress: false,
+    });
+
+    // 发送 9 个指令，应该不会触发
+    for i in 1..=9 {
+        engine.execute_submit(&codec.encode_submit(0, OrderId(i), UserId(1), Side::buy, Price(100), Quantity(1), SequenceNumber(i), Timestamp(1000 + i), TimeInForce::gtc));
+        assert_eq!(engine.uncommitted_commands, i as u64);
+    }
+
+    // 第 10 个指令触发
+    engine.execute_submit(&codec.encode_submit(0, OrderId(10), UserId(1), Side::buy, Price(100), Quantity(1), SequenceNumber(10), Timestamp(1010), TimeInForce::gtc));
+    
+    // 触发后计数器应该重置 (由 trigger_snapshot 设置)
+    assert_eq!(engine.uncommitted_commands, 0);
+}

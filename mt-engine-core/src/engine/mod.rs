@@ -25,39 +25,39 @@ use std::io::Write;
 /// 方案 B：全链路零分配 & SBE 直接编码
 pub struct Engine<'a, B: OrderBookBackend = SparseBackend> {
     pub backend: B,
-    last_sequence_number: SequenceNumber,
-    last_timestamp: Timestamp,
-    trade_id_seq: u64,
+    pub(crate) last_sequence_number: SequenceNumber,
+    pub(crate) last_timestamp: Timestamp,
+    pub(crate) trade_id_seq: u64,
 
     /// 用户提供的响应缓冲区 (Zero-Allocation & External Management)
     response_buffer: &'a mut [u8],
 
     /// 最新成交价 (Last Trade Price)
-    ltp: Price,
+    pub(crate) ltp: Price,
 
     /// 条件单暂存区 (SL/TP Orders)
-    condition_order_store: Slab<OrderData>,
+    pub(crate) condition_order_store: Slab<OrderData>,
 
     /// 预分配触发缓冲区 (避免热路径分配，存储 Slab 索引)
     trigger_index_buffer: Vec<usize>,
 
     /// 止损触发池 - 买单 (LTP >= TriggerPrice)
-    stop_buy_triggers: BTreeMap<Price, Vec<usize>>,
+    pub(crate) stop_buy_triggers: BTreeMap<Price, Vec<usize>>,
     /// 止损触发池 - 卖单 (LTP <= TriggerPrice)
-    stop_sell_triggers: BTreeMap<Price, Vec<usize>>,
+    pub(crate) stop_sell_triggers: BTreeMap<Price, Vec<usize>>,
     /// 止盈触发池 - 买单 (LTP <= TriggerPrice)
-    tp_buy_triggers: BTreeMap<Price, Vec<usize>>,
+    pub(crate) tp_buy_triggers: BTreeMap<Price, Vec<usize>>,
     /// 止盈触发池 - 卖单 (LTP >= TriggerPrice)
-    tp_sell_triggers: BTreeMap<Price, Vec<usize>>,
+    pub(crate) tp_sell_triggers: BTreeMap<Price, Vec<usize>>,
 
     #[cfg(feature = "snapshot")]
     pub snapshot_config: Option<SnapshotConfig>,
     #[cfg(feature = "snapshot")]
-    uncommitted_commands: u64,
+    pub(crate) uncommitted_commands: u64,
     #[cfg(feature = "snapshot")]
-    last_snapshot_ts: u64,
+    pub(crate) last_snapshot_ts: u64,
     #[cfg(feature = "snapshot")]
-    snapshotting_pid: libc::pid_t,
+    pub(crate) snapshotting_pid: libc::pid_t,
 }
 
 impl<'a, B: OrderBookBackend> Engine<'a, B> {
@@ -83,9 +83,7 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             last_snapshot_ts: 0,
             #[cfg(feature = "snapshot")]
             snapshotting_pid: 0,
-        };
-
-        engine
+        }
     }
 
     /// 预检查 FOK 深度是否满足
@@ -722,9 +720,15 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             .map(|c| c.compress)
             .unwrap_or(true);
 
+        #[cfg(feature = "dev")]
+        println!("[Dev] Triggering snapshot: seq={}, ts={}, path={}", seq, ts, path);
+
         unsafe {
             let pid = libc::fork();
             if pid == 0 {
+                #[cfg(feature = "dev")]
+                println!("[Dev] Snapshot child started: pid={}", libc::getpid());
+
                 // 子进程逻辑：在子进程中完成数据搜集，彻底消灭对父进程热路径的干扰
                 
                 // 1. 设置 CPU 亲和性 (可选，仅 Linux 支持)
@@ -753,8 +757,14 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                     },
                 };
 
+                #[cfg(feature = "dev")]
+                println!("[Dev] Snapshot data collection complete");
+
                 // 3. 序列化
                 let serialized = bincode::serialize(&model).unwrap();
+
+                #[cfg(feature = "dev")]
+                println!("[Dev] Snapshot serialization complete (size: {} bytes)", serialized.len());
 
                 // 4. 确保目录存在并写入
                 let snapshot_path = std::path::Path::new(&path);
@@ -779,12 +789,17 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                     libc::_exit(1);
                 }
 
+                #[cfg(feature = "dev")]
+                println!("[Dev] Snapshot child write complete: {}", path);
+
                 libc::_exit(0);
             } else if pid < 0 {
                 return Err("Fork failed".to_string());
             } else {
                 // 父进程：记录子进程 PID 供状态检查
                 self.snapshotting_pid = pid;
+                #[cfg(feature = "dev")]
+                println!("[Dev] Parent continuing, child pid={}", pid);
             }
         }
 
@@ -813,9 +828,13 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                         let ret = libc::waitpid(self.snapshotting_pid, &mut status, libc::WNOHANG);
                         if ret == self.snapshotting_pid || ret < 0 {
                             // 子进程结束或出错
+                            #[cfg(feature = "dev")]
+                            println!("[Dev] Snapshot child {} reaped (status: {})", self.snapshotting_pid, status);
                             self.snapshotting_pid = 0;
                         } else {
                             // 仍在运行，跳过本次触发，等待下一轮
+                            #[cfg(feature = "dev")]
+                            println!("[Dev] Skipping snapshot trigger: child {} still running", self.snapshotting_pid);
                             return;
                         }
                     }
@@ -824,5 +843,21 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                 let _ = self.trigger_snapshot();
             }
         }
+    }
+
+    #[cfg(feature = "dev")]
+    pub fn dev_print_state(&self) {
+        println!("======= [Engine State Observation] =======");
+        println!("Last Seq:    {}", self.last_sequence_number.0);
+        println!("Last TS:     {}", self.last_timestamp.0);
+        println!("LTP:         {}", self.ltp.0);
+        println!("Cond Orders: {}", self.condition_order_store.len());
+        println!("Trade ID:    {}", self.trade_id_seq);
+        #[cfg(feature = "snapshot")]
+        {
+            println!("Uncommitted: {}", self.uncommitted_commands);
+            println!("Child PID:   {}", self.snapshotting_pid);
+        }
+        println!("==========================================");
     }
 }
