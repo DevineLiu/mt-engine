@@ -22,6 +22,10 @@ impl<'a> CommandCodec<'a> {
         Self { buffer }
     }
 
+    pub fn as_bytes(&self) -> &[u8] {
+        self.buffer
+    }
+
     /// 构造限价订单提交报文
     #[allow(clippy::too_many_arguments)]
     pub fn encode_submit(

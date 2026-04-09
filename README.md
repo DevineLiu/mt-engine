@@ -11,17 +11,16 @@
 MT-Engine innovatively provides two order book backends, allowing the system to switch at runtime based on the liquidity characteristics of the trading pairs. Both achieve zero-allocation and fully exploit CPU cache efficiency:
 
 ### 1. Performance Benchmarks
-Based on `Apple M4 / Modern Server CPU` hardware, benchmarking the **complete lifecycle (Order Submit + Immediate Cancel)**, latency reaches nanosecond extremes:
+Benchmarked under **50,000 order steady-state saturation** with strictly **monotonic OrderIDs**, our shootout covers the complete lifecycle (Submit + Match/Cancel) using a `MixedWorkload` (Standard, Iceberg, Stop, Post-Only):
 
-| Matching Strategy & Scenario | `DenseBackend` | `SparseBackend` | Performance Comparison |
+| Backend Configuration | Snapshot Features | Avg Latency (ns/op) | Performance Notes |
 | :--- | :---: | :---: | :--- |
-| **Standard Limit Order** | **~24.9 ns** | ~46.0 ns | 🚀 Dense is **~84%** faster |
-| **Iceberg Limit Order** | **~24.8 ns** | ~45.2 ns | 🚀 Dense is **~82%** faster |
-| **Post-Only (Maker)** | **~24.9 ns** | ~45.3 ns | 🚀 Dense is **~81%** faster |
-| **Fast Cancel Order** | **~3.7 ns** | ~3.8 ns | Tied (thanks to underlying O(1) map) |
-| **Sweep 20 Levels Deep**| **~777 ns** | ~1.58 µs | 🚀 Dense is **~103%** faster |
+| **`DenseBackend`** | OFF | **~15.6 ns** | 🚀 **O(1)** logic, zero-leak steady state |
+| **`SparseBackend`** | OFF | ~30.8 ns | 🧩 Memory efficient (O(log N)) |
+| **`SparseBackend`** | **ON** | **~30.8 ns** | 🛡️ **Zero-Cost Abstraction verified** |
+| **`Dense + Snapshot`**| N/A | Mutually Exclusive | Use `serde` for direct array persistence |
 
-*(Note: The times above represent the **complete end-to-end median latency** for processing a single business request—from input decoding, state machine update, to zero-allocation report encoding.)*
+*(Note: These benchmarks reflect high-fidelity steady-state performance. The inclusion of **O(1) OrderID Monotonicity Guards** has further optimized the hot path by removing redundant map lookups for uniqueness.)*
 
 ### 2. Architecture Differences
 

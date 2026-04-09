@@ -13,6 +13,7 @@ use mt_engine::side::Side;
 use mt_engine::time_in_force::TimeInForce;
 use mt_engine::trade_codec;
 use mt_engine::WriteBuf;
+use rustc_hash::FxHashMap;
 use slab::Slab;
 use std::collections::BTreeMap;
 
@@ -60,6 +61,10 @@ pub struct Engine<'a, B: OrderBookBackend = SparseBackend> {
     pub(crate) last_snapshot_ts: u64,
     #[cfg(feature = "snapshot")]
     pub(crate) snapshotting_pid: libc::pid_t,
+    /// 最后分配的订单 ID (用于单调性校验)
+    pub(crate) last_order_id: OrderId,
+    /// 待触发条件单 ID 映射 (OrderId -> Slab Index)
+    pub(crate) pending_stop_map: FxHashMap<OrderId, usize>,
 }
 
 impl<'a, B: OrderBookBackend> Engine<'a, B> {
@@ -85,6 +90,8 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             last_snapshot_ts: 0,
             #[cfg(feature = "snapshot")]
             snapshotting_pid: 0,
+            last_order_id: OrderId(0),
+            pending_stop_map: FxHashMap::with_capacity_and_hasher(1024, Default::default()),
         }
     }
 
@@ -106,6 +113,12 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
 
     /// 执行订单提交
     pub fn execute_submit(&mut self, decoder: &OrderSubmitDecoder) -> CommandOutcome<'_> {
+        // 严格遵循：订单 ID 必须是不重复且递增的 (O(1) 极速校验)
+        let order_id = OrderId(decoder.order_id());
+        if order_id <= self.last_order_id {
+            return CommandOutcome::Rejected(CommandFailure::DuplicateOrderId);
+        }
+        self.last_order_id = order_id;
         let seq = SequenceNumber(decoder.sequence_number());
         let ts = Timestamp(decoder.timestamp());
 
@@ -439,6 +452,16 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
                 timestamp: ts,
                 payload: &[],
             })
+        } else if let Some(s_idx) = self.pending_stop_map.remove(&order_id) {
+            // 从条件单池中移除，触发时将失效
+            self.condition_order_store.try_remove(s_idx);
+            
+            CommandOutcome::Applied(CommandReport {
+                order_id,
+                status: OrderStatus::Cancelled,
+                timestamp: ts,
+                payload: &[],
+            })
         } else {
             CommandOutcome::Rejected(CommandFailure::OrderNotFound)
         }
@@ -588,6 +611,9 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
             for i in 0..self.trigger_index_buffer.len() {
                 let s_idx = self.trigger_index_buffer[i];
                 if let Some(mut triggered_order) = self.condition_order_store.try_remove(s_idx) {
+                    // 激活后从映射表中移除
+                    self.pending_stop_map.remove(&triggered_order.order_id);
+                    
                     // 激活后直接进行 match_order
                     let _ = self.match_order(&mut triggered_order, ts, seq, offset);
 
@@ -618,7 +644,10 @@ impl<'a, B: OrderBookBackend> Engine<'a, B> {
 
     /// 内部逻辑：注册条件单到触发池
     fn register_condition_order(&mut self, order: OrderData) {
+        let order_id = order.order_id;
         let idx = self.condition_order_store.insert(order);
+        self.pending_stop_map.insert(order_id, idx);
+        
         match order.side {
             Side::buy => {
                 if order.trigger_price >= self.ltp {

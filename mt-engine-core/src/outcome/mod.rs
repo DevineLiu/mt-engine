@@ -68,6 +68,7 @@ pub enum CommandFailure {
     PostOnlyViolation,
     Expired,
     InvalidPrice,
+    DuplicateOrderId,
 }
 
 /// 命令执行结果类型 (零拷贝版本)

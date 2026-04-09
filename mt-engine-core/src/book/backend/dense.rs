@@ -142,6 +142,7 @@ impl OrderBookBackend for DenseBackend {
 
     #[inline(always)]
     fn insert_order(&mut self, order: RestingOrder<Self::LevelIdx>) -> Self::OrderIdx {
+        debug_assert!(!self.order_map.contains_key(&order.data.order_id), "Duplicate order ID in dense backend");
         let idx = self.free_list.pop().expect("Order pool exhausted");
         self.order_pool[idx as usize] = order;
         self.order_links[idx as usize] = OrderLink {
